@@ -7,7 +7,7 @@ from selenium import webdriver
 from time import sleep, time
 from lxml import etree
 import requests
-
+import img_download
 #   全局变量
 from selenium.webdriver.support.wait import WebDriverWait
 
@@ -17,55 +17,28 @@ driver = webdriver
 pic_list = list()
 
 
-def get_download(pic, dic_name, pic_list):
-    try:
-        #   获取下载链接
-        html = etree.HTML(requests.get(pic[1]).text)
-        real_link = html.xpath("//div[@id='all-sizes-header']/dl[2]/dd/a/@href")[0]
-        #   创建文件夹
-        dir = "./pic/" + dic_name
-        file_name = pic[0] + ".jpg"
-        if not path.exists(dir):
-            makedirs(dir)
-        #   关闭持久链接,重连次数为3
-        session = requests.session()
-        session.keep_alive = False
-        session.mount('http://', HTTPAdapter(max_retries=3))
-        session.mount('https://', HTTPAdapter(max_retries=3))
-        #   下载图片
-        data = requests.get(real_link, headers={"referer": pic[1]})
-        if data.status_code != 200:
-            data = requests.get(pic[1].replace("jpg", "png"), headers={"referer": pic[1]})
-            file_name = pic[0] + ".png"
-        #   存在文件。如果文件大小相同则跳过
-        if path.exists(dir + "/" + file_name):
-            file_size = path.getsize(dir + "/" + file_name)
-            content_size = len(data.content)
-            if file_size == content_size:
-                print("\r\033[1;34m跳过：", file_name, "\033[0m", end="")
-                return
-            file_name = pic[0] + "_" + str(time()).split(".")[0] + ".jpg"
-            print("\r\033[1;33m注意：\033[0m", pic[0], "有重名文件，新文件为", file_name)
-        with open(dir + "/" + file_name, 'wb') as f:
-            f.write(data.content)
-            f.close()
-        print("\r\033[1;34m当前 %s/%s：" % (pic_list.index(pic), len(pic_list)), file_name, "下载完成\033[0m", end="")
-    except Exception as e:
-        print("\r\033[1;31m出错：\033[0m", e)
-        print("\033[1;31m出错链接：\033[0m\n", pic[1])
+def get_real_link(link,max_retries=3):
+    retries = 0
+    while retries<max_retries:
+        try:
+            html = etree.HTML(requests.get(link, timeout=5).text)
+            real_link = html.xpath("//div[@id='all-sizes-header']/dl[2]/dd/a/@href")[0]
+            return real_link
+        except Exception as e:
+            retries = retries+1
+    return None
 
 
 #   获取图片信息
 def get_pic_info(url):
     global driver
-    pages = 1
+    pages = 9999999
     page = 1
     global max_page
-    while page <= max_page and page <= pages or len(pic_list) == 0:
+    while (page <= max_page and page <= pages) or len(pic_list) == 0:
         try:
             print("\r\033[1;34m正在获取第", page, "页图片链接...\033[0m", end="")
             #   设置超时时间
-            WebDriverWait(driver, 10)
             driver.get(url + "/page" + str(page))
             if page == 1:
                 pages = driver.find_elements_by_xpath("//div[@class='view pagination-view"
@@ -80,21 +53,25 @@ def get_pic_info(url):
                     break
                 else:
                     scroll_height.append(check_height)
-                sleep(10)
+                sleep(1)
+                if check_height<driver.execute_script("return document.body.scrollHeight;"):
+                    continue
+                sleep(2)
             titles = driver.find_elements_by_xpath("//div[@class='photo-list-photo-interaction']//a[@class='title']")
             links = driver.find_elements_by_xpath("//div[@class='photo-list-photo-interaction']//a[@class='overlay']")
-            #   添加图片信息，标题，引导链接
-            for i in range(len(titles)):
-                pic_list.append([titles[i].get_attribute("innerText")
-                                .replace("?", "").replace("*", "").replace("/", "")
-                                .replace("\\", "").replace(">", "").replace("<", "")
-                                .replace("|", "").replace(":", "")
-                                    , links[i].get_attribute("href") + "sizes/" + pixel])
+            if len(links) != 0:
+                print("\r\033[1;34m第", page, "页图片链接获取完成\033[0m", end="")
+                #   添加图片信息，标题，引导链接
+                for i in range(len(titles)):
+                    pic_list.append([titles[i].get_attribute("innerText")
+                                    .replace("?", "").replace("*", "").replace("/", "")
+                                    .replace("\\", "").replace(">", "").replace("<", "")
+                                    .replace("|", "").replace(":", "")
+                                        , links[i].get_attribute("href") + "sizes/" + pixel])
             if len(titles) > 0:
                 page = page + 1
         except Exception as e:
             print("\r", e)
-    print("\r", end="")
     driver.close()
     return pic_list
 
@@ -105,10 +82,20 @@ if __name__ == '__main__':
           "         Flick Downloader\n"
           "================================\033[0m")
     url = "https://www.flickr.com/photos/" + input("请输入名字：")  # 主页网址
-    max_page = int(input("输入获取页数（留空默认全部）："))  # 最大页数
-    max_thread = int(input("输入下载线程（Default=1，Max=5）："))  # 最大线程数
+    max_page = input("请输入获取页数(默认全部)：")  # 最大页数
     pixel = input("请选择分辨率（o>k>h>l）：")
+    while 1:
+        save_path=input("\r请输入保存路径(默认当前目录)：")
+        if save_path == "":
+            save_path = "."
+        if path.exists(save_path):
+            break
+        print("\r\033[1;31m路径不存在\033[0m")
     dic_name = url.split("/")[-1]
+    if max_page=="":
+        max_page = 999999
+    else:
+        max_page = int(max_page)
     #   配置driver
     chrome_opt = webdriver.ChromeOptions()
     #   不显示图片，减少渲染时间
@@ -119,7 +106,44 @@ if __name__ == '__main__':
     driver = webdriver.Chrome(r"D:\App\IDE\Python3\driver\chromedriver", options=chrome_opt)
     #  获取图片链接
     pic_list = get_pic_info(url)
-    # 多线程下载
-    pool = multiprocessing.Pool(max_thread if max_thread < 5 else 5)
-    pool.map(partial(get_download, dic_name=dic_name,pic_list=pic_list), pic_list)
-    print("\n\033[1;34m完成\033[0m")
+
+    #   获取真实链接
+    new_list = []
+    i = 0
+    count = len(pic_list)
+    for pic in pic_list:
+        title = pic[0]
+        i = i+1
+        print("\r\033[1;34m正在获取下载链接 "+str(i)+"/"+str(count)+": \033[0m" + pic[1],end="")
+        real_link = get_real_link(pic[1])
+        if real_link is not None:
+            new_list.append([title,real_link])
+        else:
+            print("\r\033[1;31m获取下载链接出错: \033[0m" + pic[1])
+    print("\r\033[1;34m已获取下载链接数 "+str(len(new_list))+"\033[0m", end="")
+    sleep(10)
+    pic_list.clear()
+    #   下载
+    index = 0
+    downlod_count = 0
+    error_count = 0
+    count = len(new_list)
+    for pic in new_list:
+        index = index+1
+        msg = img_download.download(pic[1],pic[0],save_path)
+        for info in msg:
+            for i in info:
+                status_info = i.split(":", 1)
+                if status_info[0] == "Error":
+                    error_count = error_count+1
+                    print("\r\033[1;31m" + status_info[0] + ": \033[0m" + status_info[1])
+                elif status_info[0] == "Note":
+                    print("\r\033[1;33m" + status_info[0] + ": \033[0m" + status_info[1])
+                elif status_info[0] == "Skip":
+                    print("\r\033[1;34m" + status_info[0] + " "+str(index)+"/"+str(count)+": \033[0m" + status_info[1], end="")
+                else:
+                    downlod_count =downlod_count+1
+                    print("\r\033[1;34m" + status_info[0] + " " + str(index) + "/" + str(count) + ": \033[0m" +status_info[1], end="")
+
+
+    print("\r\033[1;34m完成(下载:"+str(downlod_count)+",出错:"+str(error_count)+")\033[0m")
